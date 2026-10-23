@@ -22,6 +22,10 @@ class AccountType(Enum):
     LIABILITY = "liability"
 
 
+class DuplicateReferenceError(ValueError):
+    """A reference was reused with different journal contents."""
+
+
 @dataclass(frozen=True)
 class Posting:
     account: str
@@ -62,6 +66,34 @@ class JournalEntry:
             totals[posting.side] += _usd_cents(posting.amount)
         if totals[Side.DEBIT] != totals[Side.CREDIT]:
             raise ValueError("Journal entry must balance: debits must equal credits")
+
+
+class Ledger:
+    """Single-process, in-memory journal; not durable or concurrency-safe."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, JournalEntry] = {}
+
+    @property
+    def entries(self) -> tuple[JournalEntry, ...]:
+        return tuple(self._entries.values())
+
+    def post(self, entry: JournalEntry) -> bool:
+        """Return True for a new entry, False for an identical retry.
+
+        Posting order is part of the retry comparison in this initial model.
+        """
+        if not isinstance(entry, JournalEntry):
+            raise TypeError("Entry must be a JournalEntry")
+        existing = self._entries.get(entry.reference)
+        if existing is not None:
+            if existing != entry:
+                raise DuplicateReferenceError(
+                    f"Reference {entry.reference!r} already has different contents"
+                )
+            return False
+        self._entries[entry.reference] = entry
+        return True
 
 
 def account_balance(

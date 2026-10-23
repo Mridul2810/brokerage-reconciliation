@@ -19,6 +19,7 @@ class LedgerTests(unittest.TestCase):
         )
 
         self.assertEqual(alex_balance, Decimal("0.00"))
+
     def test_deposit_then_withdrawal_leaves_800_in_both_accounts(self):
         deposit = JournalEntry("deposit-001", (
             Posting("bank_cash", Side.DEBIT, Decimal("1000.00")),
@@ -75,3 +76,41 @@ class LedgerTests(unittest.TestCase):
             Posting("customer_a_liability", Side.CREDIT, Decimal("600.00")),
             Posting("customer_b_liability", Side.CREDIT, Decimal("400.00")),
         ))
+
+
+class LedgerIdempotencyTests(unittest.TestCase):
+    def make_deposit(self, reference="deposit-001", amount="1000.00"):
+        return JournalEntry(reference, (
+            Posting("bank_cash", Side.DEBIT, Decimal(amount)),
+            Posting("customer_alex_cash_liability", Side.CREDIT, Decimal(amount)),
+        ))
+
+    def test_identical_retry_does_not_double_credit(self):
+        book = ledger.Ledger()
+        self.assertTrue(book.post(self.make_deposit()))
+        # Build a separate object to simulate the same request arriving again.
+        self.assertFalse(book.post(self.make_deposit()))
+        self.assertEqual(len(book.entries), 1)
+        self.assertEqual(ledger.account_balance(
+            book.entries, "customer_alex_cash_liability", ledger.AccountType.LIABILITY,
+        ), Decimal("1000.00"))
+
+    def test_separate_references_are_separate_deposits(self):
+        book = ledger.Ledger()
+        self.assertTrue(book.post(self.make_deposit("deposit-001")))
+        self.assertTrue(book.post(self.make_deposit("deposit-002")))
+        self.assertEqual(len(book.entries), 2)
+        self.assertEqual(ledger.account_balance(
+            book.entries, "customer_alex_cash_liability", ledger.AccountType.LIABILITY,
+        ), Decimal("2000.00"))
+
+    def test_conflicting_retry_preserves_original_entry(self):
+        book = ledger.Ledger()
+        original = self.make_deposit()
+        book.post(original)
+        with self.assertRaises(ledger.DuplicateReferenceError):
+            book.post(self.make_deposit(amount="2000.00"))
+        self.assertEqual(book.entries, (original,))
+        self.assertEqual(ledger.account_balance(
+            book.entries, "customer_alex_cash_liability", ledger.AccountType.LIABILITY,
+        ), Decimal("1000.00"))

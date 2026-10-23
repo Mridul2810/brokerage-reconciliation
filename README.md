@@ -5,10 +5,13 @@ simulated brokerage. Simulation only; no real funds or brokerage connection.
 
 ## Current milestone
 
-An immutable in-memory model of balanced USD journal entries, plus validation
-tests. Entries are not persisted. References are labels, not yet idempotency keys.
-Database constraints, duplicate protection, trades, settlement, and reconciliation
-are planned, not implemented.
+Immutable balanced USD journal entries, derived asset and liability balances,
+and a single-process in-memory ledger with reference-based duplicate protection.
+Identical retries return False; conflicting reference reuse raises an error without
+changing the original entry. Posting order is significant when comparing retries.
+Entries and duplicate protection do not survive restarts and are not concurrency-safe.
+Database constraints, durable duplicate protection, trades, settlement, and
+reconciliation are planned, not implemented.
 
 ## Run locally
 
