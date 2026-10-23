@@ -1,10 +1,16 @@
 import unittest
 from decimal import Decimal
-
+from dataclasses import FrozenInstanceError
 from brokerage.ledger import JournalEntry, Posting, Side
 
 
 class LedgerTests(unittest.TestCase):
+    def test_posting_cannot_be_modified(self):
+        posting = Posting("bank_cash", Side.DEBIT, Decimal("1000.00"))
+
+        with self.assertRaises(FrozenInstanceError):
+            posting.amount = Decimal("500.00")
+
     def test_balanced_deposit_is_accepted(self):
         entry = JournalEntry("deposit-001", (
             Posting("bank_cash", Side.DEBIT, Decimal("1000.00")),
