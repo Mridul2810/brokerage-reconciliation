@@ -5,9 +5,21 @@ from decimal import Decimal
 from enum import Enum
 
 
+def _usd_cents(amount: Decimal) -> int:
+    """Convert a validated posting amount to cents without rounding."""
+    parts = amount.as_tuple()
+    coefficient = int("".join(str(digit) for digit in parts.digits))
+    return coefficient * 10 ** (parts.exponent + 2)
+
+
 class Side(Enum):
     DEBIT = "debit"
     CREDIT = "credit"
+
+
+class AccountType(Enum):
+    ASSET = "asset"
+    LIABILITY = "liability"
 
 
 @dataclass(frozen=True)
@@ -47,9 +59,37 @@ class JournalEntry:
         # Decimal addition otherwise depends on the active precision context.
         totals = {Side.DEBIT: 0, Side.CREDIT: 0}
         for posting in self.postings:
-            parts = posting.amount.as_tuple()
-            coefficient = int("".join(str(digit) for digit in parts.digits))
-            cents = coefficient * 10 ** (parts.exponent + 2)
-            totals[posting.side] += cents
+            totals[posting.side] += _usd_cents(posting.amount)
         if totals[Side.DEBIT] != totals[Side.CREDIT]:
             raise ValueError("Journal entry must balance: debits must equal credits")
+
+
+def account_balance(
+    entries: tuple[JournalEntry, ...],
+    account: str,
+    account_type: AccountType,
+) -> Decimal:
+    """Derive an account's balance from its postings; do not change entries."""
+    if not isinstance(account_type, AccountType):
+        raise TypeError("Account type must be an AccountType")
+    if not isinstance(account, str) or not account.strip():
+        raise ValueError("An account name is required")
+
+    increasing_side = (
+        Side.DEBIT if account_type == AccountType.ASSET else Side.CREDIT
+    )
+    balance_cents = 0
+    for entry in entries:
+        for posting in entry.postings:
+            if posting.account != account:
+                continue
+            cents = _usd_cents(posting.amount)
+            if posting.side == increasing_side:
+                balance_cents += cents
+            else:
+                balance_cents -= cents
+
+    # Construct from text to preserve exact cents regardless of Decimal precision.
+    sign = "-" if balance_cents < 0 else ""
+    dollars, cents = divmod(abs(balance_cents), 100)
+    return Decimal(f"{sign}{dollars}.{cents:02d}")
