@@ -18,7 +18,7 @@ def connect_db() -> psycopg.Connection:
     return psycopg.connect(
         host="127.0.0.1",
         port=5433,
-        dbname="brokerage",
+        dbname=os.environ.get("POSTGRES_DB", "brokerage"),
         user="brokerage",
         password=password,
         connect_timeout=5,
