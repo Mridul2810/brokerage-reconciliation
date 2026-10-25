@@ -2,7 +2,9 @@
 
 import os
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from threading import Barrier
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -55,6 +57,22 @@ class RepositoryTests(unittest.TestCase):
         self.assertTrue(first.created)
         self.assertFalse(retry.created)
         self.assertEqual(first.entry_id, retry.entry_id)
+        self.assertEqual(self.stored_postings(), [("debit", 5000), ("credit", 5000)])
+
+    def test_concurrent_identical_requests_create_one_entry(self):
+        start = Barrier(2, timeout=10)
+
+        def submit_deposit():
+            start.wait()
+            return save_entry(self.deposit())
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            first = workers.submit(submit_deposit)
+            second = workers.submit(submit_deposit)
+            results = [first.result(timeout=20), second.result(timeout=20)]
+
+        self.assertEqual(sum(result.created for result in results), 1)
+        self.assertEqual(results[0].entry_id, results[1].entry_id)
         self.assertEqual(self.stored_postings(), [("debit", 5000), ("credit", 5000)])
 
     def test_conflict_preserves_original_amount(self):
