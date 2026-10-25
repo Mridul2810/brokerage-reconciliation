@@ -10,7 +10,8 @@ from uuid import uuid4
 
 from brokerage.database import connect_db
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
-from brokerage.repository import save_entry
+from brokerage.repository import get_balance, save_entry
+from brokerage.withdrawals import InsufficientFundsError, withdraw
 
 
 @unittest.skipUnless(os.environ.get("RUN_DB_TESTS") == "1", "Database tests are opt-in")
@@ -34,6 +35,88 @@ class RepositoryTests(unittest.TestCase):
 
     def setUp(self):
         self.reference = f"test-{uuid4()}"
+
+    def funded_customer(self):
+        customer = f"withdrawal_customer_{uuid4().hex}"
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO accounts (code, account_type) VALUES (%s, 'liability')",
+                    (customer,),
+                )
+        save_entry(self.deposit(amount="100.00", customer=customer))
+        return customer
+
+    def test_withdrawal_leaves_20_and_retry_does_not_spend_again(self):
+        customer = self.funded_customer()
+        reference = f"withdraw-{uuid4()}"
+        first = withdraw(reference, customer, Decimal("80.00"))
+        retry = withdraw(reference, customer, Decimal("80.00"))
+        self.assertTrue(first.created)
+        self.assertFalse(retry.created)
+        self.assertEqual(first.entry_id, retry.entry_id)
+        self.assertEqual(get_balance(customer), Decimal("20.00"))
+
+    def test_insufficient_withdrawal_saves_no_entry(self):
+        customer = self.funded_customer()
+        reference = f"withdraw-{uuid4()}"
+        with self.assertRaises(InsufficientFundsError):
+            withdraw(reference, customer, Decimal("100.01"))
+        self.assertEqual(get_balance(customer), Decimal("100.00"))
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM journal_entries WHERE reference = %s", (reference,))
+                self.assertEqual(cursor.fetchone()[0], 0)
+
+    def test_concurrent_withdrawals_cannot_both_spend_80_from_100(self):
+        customer = self.funded_customer()
+        start = Barrier(2, timeout=10)
+
+        def attempt(reference):
+            start.wait()
+            try:
+                return withdraw(reference, customer, Decimal("80.00")).created
+            except InsufficientFundsError:
+                return False
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            first = workers.submit(attempt, f"withdraw-{uuid4()}")
+            second = workers.submit(attempt, f"withdraw-{uuid4()}")
+            results = [first.result(timeout=20), second.result(timeout=20)]
+        self.assertEqual(sorted(results), [False, True])
+        self.assertEqual(get_balance(customer), Decimal("20.00"))
+
+    def test_withdrawal_conflict_is_rejected_even_when_funds_are_low(self):
+        customer = self.funded_customer()
+        reference = f"withdraw-{uuid4()}"
+        withdraw(reference, customer, Decimal("80.00"))
+        with self.assertRaises(DuplicateReferenceError):
+            withdraw(reference, customer, Decimal("90.00"))
+        self.assertEqual(get_balance(customer), Decimal("20.00"))
+
+    def test_database_balances_follow_stored_account_types(self):
+        suffix = uuid4().hex
+        asset = f"test_cash_{suffix}"
+        liability = f"test_customer_{suffix}"
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO accounts (code, account_type) VALUES (%s, 'asset'), (%s, 'liability')",
+                    (asset, liability),
+                )
+
+        self.assertEqual(get_balance(asset), Decimal("0.00"))
+        self.assertEqual(get_balance(liability), Decimal("0.00"))
+        save_entry(JournalEntry(self.reference, (
+            Posting(asset, Side.DEBIT, Decimal("100.00")),
+            Posting(liability, Side.CREDIT, Decimal("100.00")),
+        )))
+        self.assertEqual(get_balance(asset), Decimal("100.00"))
+        self.assertEqual(get_balance(liability), Decimal("100.00"))
+
+    def test_balance_for_unknown_account_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Unknown ledger account"):
+            get_balance(f"missing_{uuid4().hex}")
 
     def deposit(self, amount="50.00", customer="customer_alex_cash_liability"):
         return JournalEntry(self.reference, (
