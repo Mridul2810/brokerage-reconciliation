@@ -21,12 +21,17 @@ def withdraw(reference: str, customer: str, amount: Decimal) -> SaveResult:
         with connection.cursor() as cursor:
             # Serialize withdrawal decisions for this customer until commit.
             cursor.execute(
-                "SELECT account_type FROM accounts WHERE code = %s FOR UPDATE",
+                """SELECT account_type, EXISTS (
+                       SELECT 1 FROM cash_account_pairs
+                       WHERE reserved_account_id = accounts.account_id
+                   ) FROM accounts WHERE code = %s FOR UPDATE""",
                 (customer,),
             )
             account = cursor.fetchone()
             if account is None or account[0] != "liability":
                 raise ValueError("Withdrawal requires an existing customer liability account")
+            if account[1]:
+                raise ValueError("Reserved cash cannot be withdrawn directly")
 
             cursor.execute(
                 "SELECT entry_id FROM journal_entries WHERE reference = %s",

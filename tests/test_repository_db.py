@@ -12,6 +12,7 @@ from psycopg.errors import CheckViolation
 
 from brokerage.database import connect_db
 from brokerage.corrections import reverse_entry
+from brokerage.reservations import reserve_cash
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -49,6 +50,79 @@ class RepositoryTests(unittest.TestCase):
                 )
         save_entry(self.deposit(amount="100.00", customer=customer))
         return customer
+
+    def funded_cash_pair(self):
+        available = self.funded_customer()
+        reserved = f"reserved_{uuid4().hex}"
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO accounts (code, account_type) VALUES (%s, 'liability') RETURNING account_id",
+                    (reserved,),
+                )
+                reserved_id = cursor.fetchone()[0]
+                cursor.execute("""
+                    INSERT INTO cash_account_pairs (available_account_id, reserved_account_id)
+                    SELECT account_id, %s FROM accounts WHERE code = %s
+                """, (reserved_id, available))
+        return available, reserved
+
+    def test_reservation_moves_cash_without_changing_bank_cash(self):
+        available, reserved = self.funded_cash_pair()
+        bank_before = get_balance("bank_cash")
+        reserve_cash(f"reserve-{uuid4()}", available, Decimal("60.00"))
+        self.assertEqual(get_balance(available), Decimal("40.00"))
+        self.assertEqual(get_balance(reserved), Decimal("60.00"))
+        self.assertEqual(get_balance("bank_cash"), bank_before)
+
+    def test_reservation_retry_and_conflict_preserve_balances(self):
+        available, reserved = self.funded_cash_pair()
+        reference = f"reserve-{uuid4()}"
+        first = reserve_cash(reference, available, Decimal("80.00"))
+        retry = reserve_cash(reference, available, Decimal("80.00"))
+        self.assertTrue(first.created)
+        self.assertFalse(retry.created)
+        self.assertEqual(first.entry_id, retry.entry_id)
+        with self.assertRaises(DuplicateReferenceError):
+            reserve_cash(reference, available, Decimal("90.00"))
+        self.assertEqual(get_balance(available), Decimal("20.00"))
+        self.assertEqual(get_balance(reserved), Decimal("80.00"))
+
+    def test_reservation_and_withdrawal_compete_for_same_available_cash(self):
+        available, reserved = self.funded_cash_pair()
+        start = Barrier(2, timeout=10)
+
+        def attempt(operation):
+            start.wait()
+            try:
+                operation(f"cash-request-{uuid4()}", available, Decimal("80.00"))
+                return True
+            except InsufficientFundsError:
+                return False
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            reservation = workers.submit(attempt, reserve_cash)
+            withdrawal = workers.submit(attempt, withdraw)
+            reserved_ok = reservation.result(timeout=20)
+            withdrawn_ok = withdrawal.result(timeout=20)
+        self.assertEqual(sum((reserved_ok, withdrawn_ok)), 1)
+        self.assertEqual(get_balance(available), Decimal("20.00"))
+        self.assertEqual(get_balance(reserved), Decimal("80.00") if reserved_ok else Decimal("0.00"))
+
+    def test_reserved_cash_cannot_be_spent_by_withdrawing_available_cash(self):
+        available, reserved = self.funded_cash_pair()
+        reserve_cash(f"reserve-{uuid4()}", available, Decimal("60.00"))
+        with self.assertRaises(InsufficientFundsError):
+            withdraw(f"withdraw-{uuid4()}", available, Decimal("50.00"))
+        self.assertEqual(get_balance(available), Decimal("40.00"))
+        self.assertEqual(get_balance(reserved), Decimal("60.00"))
+
+    def test_direct_withdrawal_from_reserved_account_is_rejected(self):
+        available, reserved = self.funded_cash_pair()
+        reserve_cash(f"reserve-{uuid4()}", available, Decimal("60.00"))
+        with self.assertRaisesRegex(ValueError, "Reserved cash cannot be withdrawn"):
+            withdraw(f"withdraw-{uuid4()}", reserved, Decimal("10.00"))
+        self.assertEqual(get_balance(reserved), Decimal("60.00"))
 
     def test_reversal_restores_balance_and_retry_adds_nothing(self):
         customer = self.funded_customer()
