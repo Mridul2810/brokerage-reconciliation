@@ -29,6 +29,10 @@ def reverse_entry(original_reference: str, reversal_reference: str) -> SaveResul
             if cursor.fetchone() is not None:
                 raise ValueError("Order journal entries require the order workflow, not a generic reversal")
 
+            cursor.execute("SELECT 1 FROM trade_executions WHERE cash_entry_id = %s", (original_id,))
+            if cursor.fetchone() is not None:
+                raise ValueError("Trade journal entries require the trade workflow, not a generic reversal")
+
             cursor.execute(
                 "SELECT 1 FROM journal_reversals WHERE reversal_entry_id = %s",
                 (original_id,),

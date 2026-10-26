@@ -14,6 +14,7 @@ from brokerage.database import connect_db
 from brokerage.corrections import reverse_entry
 from brokerage.reservations import reserve_cash
 from brokerage.orders import cancel_buy_order, create_buy_order
+from brokerage.executions import execute_buy_order, pending_positions
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -75,6 +76,67 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(result.status, "reserved")
         self.assertEqual(get_balance(available), Decimal("40.00"))
         self.assertEqual(get_balance(reserved), Decimal("60.00"))
+
+    def test_full_fill_releases_price_improvement_and_records_pending_shares(self):
+        available, reserved = self.funded_cash_pair()
+        reference = f"order-{uuid4()}"
+        create_buy_order(reference, available, "AAPL", 2, Decimal("30.00"))
+        bank_before = get_balance("bank_cash")
+        payable_before = get_balance("clearing_trade_payable")
+        result = execute_buy_order(f"fill-{uuid4()}", reference, Decimal("25.00"))
+        self.assertTrue(result.created)
+        self.assertEqual(get_balance(available), Decimal("50.00"))
+        self.assertEqual(get_balance(reserved), Decimal("0.00"))
+        self.assertEqual(get_balance("bank_cash"), bank_before)
+        self.assertEqual(get_balance("clearing_trade_payable") - payable_before, Decimal("50.00"))
+        self.assertEqual(pending_positions(available), [("AAPL", 2)])
+
+    def test_execution_retry_and_conflict_do_not_duplicate_shares(self):
+        available, reserved = self.funded_cash_pair()
+        order = f"order-{uuid4()}"
+        execution = f"fill-{uuid4()}"
+        create_buy_order(order, available, "AAPL", 2, Decimal("30.00"))
+        execute_buy_order(execution, order, Decimal("30.00"))
+        self.assertFalse(execute_buy_order(execution, order, Decimal("30.00")).created)
+        with self.assertRaises(DuplicateReferenceError):
+            execute_buy_order(execution, order, Decimal("25.00"))
+        self.assertEqual(pending_positions(available), [("AAPL", 2)])
+        self.assertEqual(get_balance(reserved), Decimal("0.00"))
+
+    def test_execution_above_limit_leaves_order_reserved(self):
+        available, reserved = self.funded_cash_pair()
+        order = f"order-{uuid4()}"
+        create_buy_order(order, available, "AAPL", 2, Decimal("30.00"))
+        with self.assertRaisesRegex(ValueError, "exceeds"):
+            execute_buy_order(f"fill-{uuid4()}", order, Decimal("30.01"))
+        self.assertEqual(get_balance(reserved), Decimal("60.00"))
+        self.assertEqual(pending_positions(available), [])
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT status FROM buy_orders WHERE reference = %s", (order,))
+                self.assertEqual(cursor.fetchone()[0], "reserved")
+
+    def test_cancelled_order_cannot_be_executed(self):
+        available, reserved = self.funded_cash_pair()
+        order = f"order-{uuid4()}"
+        create_buy_order(order, available, "AAPL", 2, Decimal("30.00"))
+        cancel_buy_order(order)
+        with self.assertRaisesRegex(ValueError, "Only reserved"):
+            execute_buy_order(f"fill-{uuid4()}", order, Decimal("25.00"))
+        self.assertEqual(get_balance(available), Decimal("100.00"))
+        self.assertEqual(pending_positions(available), [])
+
+    def test_executed_order_cannot_be_cancelled_or_filled_again(self):
+        available, reserved = self.funded_cash_pair()
+        order = f"order-{uuid4()}"
+        create_buy_order(order, available, "AAPL", 2, Decimal("30.00"))
+        execute_buy_order(f"fill-{uuid4()}", order, Decimal("25.00"))
+        with self.assertRaisesRegex(ValueError, "Only unexecuted"):
+            cancel_buy_order(order)
+        with self.assertRaisesRegex(ValueError, "Only reserved"):
+            execute_buy_order(f"fill-{uuid4()}", order, Decimal("25.00"))
+        self.assertEqual(pending_positions(available), [("AAPL", 2)])
+        self.assertEqual(get_balance(available), Decimal("50.00"))
 
     def test_cancellation_releases_only_its_order_and_retry_adds_nothing(self):
         available, reserved = self.funded_cash_pair()
