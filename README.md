@@ -20,7 +20,11 @@ the same available account before checking funds. Direct withdrawals from a
 configured reserved account are rejected. Account-pair administration is currently
 trusted. Whole-share buy limit orders can be created atomically with cash
 reservations. Identical order retries compare customer, symbol, quantity, and price.
-Orders currently stop at `reserved`; cancellation, execution, and release are pending.
+Reserved orders can be cancelled atomically with a release of their own reservation.
+Repeated cancellation does not release cash twice. Generic reversals of order
+reservation or cancellation entries are rejected by the correction service.
+Execution and settlement are not yet implemented. Direct SQL can still bypass
+order lifecycle rules; application-role restrictions remain future work.
 Full-entry reversals preserve original postings and link a new opposite entry to
 the original. They are administrative corrections, not customer withdrawals:
 they may produce a negative balance and require an operational review in a real
@@ -56,6 +60,7 @@ docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sq
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/005_reversals.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/006_cash_account_pairs.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/007_buy_orders.sql
+docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/008_order_cancellation.sql
 ```
 
 Create the demo accounts, then run the Python commands:
@@ -88,6 +93,7 @@ docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/005_reversals.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/006_cash_account_pairs.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/007_buy_orders.sql
+docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/008_order_cancellation.sql
 RUN_DB_TESTS=1 ./.venv/bin/python -m unittest discover -s tests -v
 ```
 

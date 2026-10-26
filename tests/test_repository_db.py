@@ -13,7 +13,7 @@ from psycopg.errors import CheckViolation
 from brokerage.database import connect_db
 from brokerage.corrections import reverse_entry
 from brokerage.reservations import reserve_cash
-from brokerage.orders import create_buy_order
+from brokerage.orders import cancel_buy_order, create_buy_order
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -75,6 +75,53 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(result.status, "reserved")
         self.assertEqual(get_balance(available), Decimal("40.00"))
         self.assertEqual(get_balance(reserved), Decimal("60.00"))
+
+    def test_cancellation_releases_only_its_order_and_retry_adds_nothing(self):
+        available, reserved = self.funded_cash_pair()
+        reserve_cash(f"standalone-{uuid4()}", available, Decimal("10.00"))
+        reference = f"order-{uuid4()}"
+        create_buy_order(reference, available, "AAPL", 2, Decimal("30.00"))
+        first = cancel_buy_order(reference)
+        retry = cancel_buy_order(reference)
+        self.assertTrue(first.created)
+        self.assertEqual(first.status, "cancelled")
+        self.assertFalse(retry.created)
+        self.assertEqual(get_balance(available), Decimal("90.00"))
+        self.assertEqual(get_balance(reserved), Decimal("10.00"))
+        replay = create_buy_order(reference, available, "AAPL", 2, Decimal("30.00"))
+        self.assertFalse(replay.created)
+        self.assertEqual(replay.status, "cancelled")
+        self.assertEqual(get_balance(available), Decimal("90.00"))
+
+    def test_concurrent_cancellations_release_cash_once(self):
+        available, reserved = self.funded_cash_pair()
+        reference = f"order-{uuid4()}"
+        create_buy_order(reference, available, "AAPL", 2, Decimal("30.00"))
+        start = Barrier(2, timeout=10)
+
+        def cancel():
+            start.wait()
+            return cancel_buy_order(reference)
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            first = workers.submit(cancel)
+            second = workers.submit(cancel)
+            results = [first.result(timeout=20), second.result(timeout=20)]
+        self.assertEqual(sum(result.created for result in results), 1)
+        self.assertEqual(get_balance(available), Decimal("100.00"))
+        self.assertEqual(get_balance(reserved), Decimal("0.00"))
+
+    def test_order_reservation_cannot_be_generically_reversed(self):
+        available, reserved = self.funded_cash_pair()
+        reference = f"order-{uuid4()}"
+        create_buy_order(reference, available, "AAPL", 2, Decimal("30.00"))
+        with self.assertRaisesRegex(ValueError, "order workflow"):
+            reverse_entry(f"order-reserve:{reference}", f"reversal-{uuid4()}")
+        self.assertEqual(get_balance(reserved), Decimal("60.00"))
+
+    def test_unknown_order_cancellation_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Unknown buy order"):
+            cancel_buy_order(f"missing-{uuid4()}")
 
     def test_buy_order_retry_and_changed_quantity(self):
         available, reserved = self.funded_cash_pair()

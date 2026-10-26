@@ -22,6 +22,13 @@ def reverse_entry(original_reference: str, reversal_reference: str) -> SaveResul
                 raise ValueError(f"Unknown journal reference: {original_reference}")
             original_id = original[0]
 
+            cursor.execute("""
+                SELECT 1 FROM buy_orders
+                WHERE reservation_entry_id = %s OR cancellation_entry_id = %s
+            """, (original_id, original_id))
+            if cursor.fetchone() is not None:
+                raise ValueError("Order journal entries require the order workflow, not a generic reversal")
+
             cursor.execute(
                 "SELECT 1 FROM journal_reversals WHERE reversal_entry_id = %s",
                 (original_id,),
