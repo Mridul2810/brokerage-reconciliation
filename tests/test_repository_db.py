@@ -13,6 +13,7 @@ from psycopg.errors import CheckViolation
 from brokerage.database import connect_db
 from brokerage.corrections import reverse_entry
 from brokerage.reservations import reserve_cash
+from brokerage.orders import create_buy_order
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -66,6 +67,38 @@ class RepositoryTests(unittest.TestCase):
                     SELECT account_id, %s FROM accounts WHERE code = %s
                 """, (reserved_id, available))
         return available, reserved
+
+    def test_buy_order_reserves_quantity_times_limit_price(self):
+        available, reserved = self.funded_cash_pair()
+        result = create_buy_order(f"order-{uuid4()}", available, "AAPL", 2, Decimal("30.00"))
+        self.assertTrue(result.created)
+        self.assertEqual(result.status, "reserved")
+        self.assertEqual(get_balance(available), Decimal("40.00"))
+        self.assertEqual(get_balance(reserved), Decimal("60.00"))
+
+    def test_buy_order_retry_and_changed_quantity(self):
+        available, reserved = self.funded_cash_pair()
+        reference = f"order-{uuid4()}"
+        create_buy_order(reference, available, "AAPL", 2, Decimal("30.00"))
+        retry = create_buy_order(reference, available, "AAPL", 2, Decimal("30.00"))
+        self.assertFalse(retry.created)
+        with self.assertRaises(DuplicateReferenceError):
+            create_buy_order(reference, available, "AAPL", 3, Decimal("30.00"))
+        self.assertEqual(get_balance(reserved), Decimal("60.00"))
+
+    def test_unfunded_order_does_not_create_order_or_reservation(self):
+        available, reserved = self.funded_cash_pair()
+        reference = f"order-{uuid4()}"
+        with self.assertRaises(InsufficientFundsError):
+            create_buy_order(reference, available, "AAPL", 2, Decimal("60.00"))
+        self.assertEqual(get_balance(available), Decimal("100.00"))
+        self.assertEqual(get_balance(reserved), Decimal("0.00"))
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM buy_orders WHERE reference = %s", (reference,))
+                self.assertEqual(cursor.fetchone()[0], 0)
+                cursor.execute("SELECT COUNT(*) FROM journal_entries WHERE reference = %s", (f"order-reserve:{reference}",))
+                self.assertEqual(cursor.fetchone()[0], 0)
 
     def test_reservation_moves_cash_without_changing_bank_cash(self):
         available, reserved = self.funded_cash_pair()
