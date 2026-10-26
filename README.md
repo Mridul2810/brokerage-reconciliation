@@ -11,8 +11,13 @@ return the existing entry; conflicting contents are rejected. Posting order is
 significant when comparing retries. An in-memory implementation is also included.
 
 PostgreSQL checks balance and posting count at transaction commit and blocks
-journal updates, deletes, and truncation. These guards do not yet seal an entry
-against additional balanced postings or restrict changes to account definitions.
+journal updates, deletes, and truncation. Migration 004 restricts new postings to
+the transaction creating their journal entry, sealing entries at commit.
+Account definitions are not yet protected against changes.
+Full-entry reversals preserve original postings and link a new opposite entry to
+the original. They are administrative corrections, not customer withdrawals:
+they may produce a negative balance and require an operational review in a real
+system. Partial reversals and reversing a reversal are not supported.
 Database administrator privileges can bypass guards; application roles are planned.
 Trades, settlement, reconciliation, and an HTTP API are not implemented yet.
 
@@ -40,6 +45,8 @@ Wait for `healthy`. On a fresh database, apply each migration once, in order:
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/001_accounts.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/002_journal.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/003_journal_guards.sql
+docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/004_seal_entries.sql
+docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/005_reversals.sql
 ```
 
 Create the demo accounts, then run the Python commands:
@@ -68,6 +75,8 @@ docker compose exec db psql -U brokerage -d postgres -c "CREATE DATABASE brokera
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/001_accounts.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/002_journal.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/003_journal_guards.sql
+docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/004_seal_entries.sql
+docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/005_reversals.sql
 RUN_DB_TESTS=1 ./.venv/bin/python -m unittest discover -s tests -v
 ```
 

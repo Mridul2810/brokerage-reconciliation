@@ -8,7 +8,10 @@ from threading import Barrier
 from unittest.mock import patch
 from uuid import uuid4
 
+from psycopg.errors import CheckViolation
+
 from brokerage.database import connect_db
+from brokerage.corrections import reverse_entry
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -46,6 +49,28 @@ class RepositoryTests(unittest.TestCase):
                 )
         save_entry(self.deposit(amount="100.00", customer=customer))
         return customer
+
+    def test_reversal_restores_balance_and_retry_adds_nothing(self):
+        customer = self.funded_customer()
+        reference = f"reversal-{uuid4()}"
+        first = reverse_entry(self.reference, reference)
+        retry = reverse_entry(self.reference, reference)
+        self.assertTrue(first.created)
+        self.assertFalse(retry.created)
+        self.assertEqual(first.entry_id, retry.entry_id)
+        self.assertEqual(get_balance(customer), Decimal("0.00"))
+        self.assertEqual(self.stored_postings(), [("debit", 10000), ("credit", 10000)])
+
+    def test_second_reversal_reference_is_rejected(self):
+        customer = self.funded_customer()
+        reverse_entry(self.reference, f"reversal-{uuid4()}")
+        with self.assertRaisesRegex(ValueError, "already been reversed"):
+            reverse_entry(self.reference, f"reversal-{uuid4()}")
+        self.assertEqual(get_balance(customer), Decimal("0.00"))
+
+    def test_unknown_original_cannot_be_reversed(self):
+        with self.assertRaisesRegex(ValueError, "Unknown journal reference"):
+            reverse_entry(f"missing-{uuid4()}", f"reversal-{uuid4()}")
 
     def test_withdrawal_leaves_20_and_retry_does_not_spend_again(self):
         customer = self.funded_customer()
@@ -175,3 +200,18 @@ class RepositoryTests(unittest.TestCase):
                     (self.reference,),
                 )
                 self.assertEqual(cursor.fetchone()[0], 0)
+
+    def test_committed_entry_rejects_additional_balanced_postings(self):
+        saved = save_entry(self.deposit())
+        with self.assertRaisesRegex(CheckViolation, "same transaction"):
+            with connect_db() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO postings (entry_id, account_id, side, amount_cents)
+                        SELECT %s, account_id,
+                               CASE WHEN code = 'bank_cash' THEN 'debit' ELSE 'credit' END,
+                               100
+                        FROM accounts
+                        WHERE code IN ('bank_cash', 'customer_alex_cash_liability')
+                    """, (saved.entry_id,))
+        self.assertEqual(self.stored_postings(), [("debit", 5000), ("credit", 5000)])
