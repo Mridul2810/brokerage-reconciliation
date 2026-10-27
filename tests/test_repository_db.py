@@ -18,7 +18,7 @@ from brokerage.orders import cancel_buy_order, create_buy_order
 from brokerage.executions import execute_buy_order, pending_positions, settled_positions
 from brokerage.settlement import settle_execution
 from brokerage.clearing import load_internal_trades
-from brokerage.reports import save_report
+from brokerage.reports import get_report, save_report
 from brokerage.investigations import record_event
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
@@ -106,6 +106,9 @@ class RepositoryTests(unittest.TestCase):
         clearing = [replace(internal[0], quantity=3)]
         bank_before = get_balance("bank_cash")
         run_id = save_report(available, "synthetic.csv", internal, clearing)
+        saved_report = get_report(run_id)
+        self.assertEqual(saved_report["breaks"][0]["status"], "open")
+        self.assertEqual(saved_report["clearing_records"][0]["quantity"], 3)
         self.assertEqual(get_balance("bank_cash"), bank_before)
         settle_execution(execution)
         with connect_db() as connection:

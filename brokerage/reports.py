@@ -5,6 +5,7 @@ import json
 from dataclasses import asdict
 
 from psycopg.types.json import Jsonb
+from psycopg.rows import dict_row
 
 from brokerage.database import connect_db
 from brokerage.reconciliation import TradeRecord, reconcile
@@ -41,3 +42,33 @@ def save_report(
                     VALUES (%s, %s, %s, %s, %s, %s)
                 """, (run_id, item.reference, item.kind, item.field, item.internal, item.clearing))
     return run_id
+
+
+def get_report(run_id: int) -> dict | None:
+    """Read evidence, breaks, and investigation history from one snapshot."""
+    with connect_db() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            cursor.execute("SELECT * FROM reconciliation_runs WHERE run_id = %s", (run_id,))
+            report = cursor.fetchone()
+            if report is None:
+                return None
+            cursor.execute("""
+                SELECT break_id, reference, kind, field, internal_value, clearing_value
+                FROM reconciliation_breaks WHERE run_id = %s ORDER BY break_id
+            """, (run_id,))
+            breaks = cursor.fetchall()
+            cursor.execute("""
+                SELECT e.event_id, e.reference, e.break_id, e.status, e.actor, e.note, e.created_at
+                FROM investigation_events e
+                JOIN reconciliation_breaks b ON b.break_id = e.break_id
+                WHERE b.run_id = %s ORDER BY e.event_id
+            """, (run_id,))
+            histories = {}
+            for event in cursor.fetchall():
+                histories.setdefault(event["break_id"], []).append(event)
+            for item in breaks:
+                item["history"] = histories.get(item["break_id"], [])
+                item["status"] = item["history"][-1]["status"] if item["history"] else "open"
+            report["breaks"] = breaks
+            return report

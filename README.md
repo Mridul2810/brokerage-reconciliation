@@ -38,7 +38,8 @@ they may produce a negative balance and require an operational review in a real
 system. Partial reversals and reversing a reversal are not supported.
 Database administrator privileges can bypass guards; application roles are planned.
 Reconciliation compares execution records with a validated clearing CSV and reports
-missing records, duplicates, and field mismatches. An HTTP API is not implemented yet.
+missing records, duplicates, and field mismatches. A local read-only HTTP API
+exposes balances and preserved report evidence, including investigation history.
 
 ## Run locally
 
@@ -120,6 +121,24 @@ guarantee a particular database interleaving or prove all concurrency behavior.
 
 The GitHub Actions workflow provisions a fresh PostgreSQL test database, applies
 the migrations, and runs the full suite on pushes and pull requests.
+
+## Local API
+
+```sh
+./.venv/bin/python -m uvicorn brokerage.api:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Open `http://127.0.0.1:8000/docs` for interactive documentation. Endpoints:
+
+- `GET /health`: process liveness, not database readiness.
+- `GET /accounts/{account_code}/balance`: USD balance as decimal text.
+- `GET /reconciliation/runs/{run_id}`: compared snapshots, breaks, and event history.
+
+Unknown resources return 404, invalid report IDs return 422, and database
+connection failures return 503 without exposing connection details. HTTP tests
+use mocked repository calls; database integration tests separately exercise the
+real report reader. The API has no authentication and is intended only for local
+development; do not expose it publicly. Stop the server with Control-C.
 
 ## Reconciliation demo
 
