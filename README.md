@@ -25,7 +25,11 @@ Repeated cancellation does not release cash twice. Generic reversals of order
 reservation or cancellation entries are rejected by the correction service.
 Simulated full buy fills enforce the limit price, release unused reserved cash,
 record pending shares, and move trade cost into a clearing payable. Bank cash
-does not move until settlement, which is not yet implemented. Partial fills,
+does not move until manual settlement. Settlement clears the trade payable,
+reduces bank cash, and moves shares from pending to settled atomically. Identical
+and concurrent settlement retries do not pay twice. There is no settlement-date
+calendar, external funds transfer, or bank-liquidity authorization in this simulation.
+Share positions are derived from execution records, not a custody ledger. Partial fills,
 fractional quantities, and fees are not yet supported. Direct SQL can still bypass
 order lifecycle rules; application-role restrictions remain future work.
 Full-entry reversals preserve original postings and link a new opposite entry to
@@ -65,6 +69,7 @@ docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sq
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/007_buy_orders.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/008_order_cancellation.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/009_trade_execution.sql
+docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/010_trade_settlement.sql
 ```
 
 Create the demo accounts, then run the Python commands:
@@ -99,6 +104,7 @@ docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/007_buy_orders.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/008_order_cancellation.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/009_trade_execution.sql
+docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/010_trade_settlement.sql
 RUN_DB_TESTS=1 ./.venv/bin/python -m unittest discover -s tests -v
 ```
 

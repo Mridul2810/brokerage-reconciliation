@@ -14,7 +14,8 @@ from brokerage.database import connect_db
 from brokerage.corrections import reverse_entry
 from brokerage.reservations import reserve_cash
 from brokerage.orders import cancel_buy_order, create_buy_order
-from brokerage.executions import execute_buy_order, pending_positions
+from brokerage.executions import execute_buy_order, pending_positions, settled_positions
+from brokerage.settlement import settle_execution
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -76,6 +77,56 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(result.status, "reserved")
         self.assertEqual(get_balance(available), Decimal("40.00"))
         self.assertEqual(get_balance(reserved), Decimal("60.00"))
+
+    def executed_trade(self):
+        available, reserved = self.funded_cash_pair()
+        order, execution = f"order-{uuid4()}", f"fill-{uuid4()}"
+        create_buy_order(order, available, "AAPL", 2, Decimal("30.00"))
+        execute_buy_order(execution, order, Decimal("25.00"))
+        return available, execution
+
+    def test_settlement_moves_bank_cash_and_pending_shares_atomically(self):
+        available, execution = self.executed_trade()
+        bank_before = get_balance("bank_cash")
+        payable_before = get_balance("clearing_trade_payable")
+        self.assertEqual(pending_positions(available), [("AAPL", 2)])
+        self.assertTrue(settle_execution(execution).created)
+        self.assertEqual(get_balance("bank_cash"), bank_before - Decimal("50.00"))
+        self.assertEqual(get_balance("clearing_trade_payable"), payable_before - Decimal("50.00"))
+        self.assertEqual(get_balance(available), Decimal("50.00"))
+        self.assertEqual(pending_positions(available), [])
+        self.assertEqual(settled_positions(available), [("AAPL", 2)])
+
+    def test_settlement_retry_does_not_pay_twice(self):
+        available, execution = self.executed_trade()
+        first = settle_execution(execution)
+        bank_after = get_balance("bank_cash")
+        retry = settle_execution(execution)
+        self.assertFalse(retry.created)
+        self.assertEqual(first.entry_id, retry.entry_id)
+        self.assertEqual(get_balance("bank_cash"), bank_after)
+        self.assertEqual(settled_positions(available), [("AAPL", 2)])
+
+    def test_concurrent_settlements_pay_once(self):
+        available, execution = self.executed_trade()
+        bank_before = get_balance("bank_cash")
+        start = Barrier(2, timeout=10)
+
+        def settle():
+            start.wait()
+            return settle_execution(execution)
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            first, second = workers.submit(settle), workers.submit(settle)
+            results = [first.result(timeout=20), second.result(timeout=20)]
+        self.assertEqual(sum(result.created for result in results), 1)
+        self.assertEqual(results[0].entry_id, results[1].entry_id)
+        self.assertEqual(get_balance("bank_cash"), bank_before - Decimal("50.00"))
+        self.assertEqual(settled_positions(available), [("AAPL", 2)])
+
+    def test_unknown_execution_cannot_be_settled(self):
+        with self.assertRaisesRegex(ValueError, "Unknown execution"):
+            settle_execution(f"missing-{uuid4()}")
 
     def test_full_fill_releases_price_improvement_and_records_pending_shares(self):
         available, reserved = self.funded_cash_pair()

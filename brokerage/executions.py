@@ -85,13 +85,21 @@ def execute_buy_order(reference: str, order_reference: str, price: Decimal) -> E
 
 
 def pending_positions(available_account: str) -> list[tuple[str, int]]:
+    return _positions(available_account, "pending")
+
+
+def settled_positions(available_account: str) -> list[tuple[str, int]]:
+    return _positions(available_account, "settled")
+
+
+def _positions(available_account: str, status: str) -> list[tuple[str, int]]:
     with connect_db() as connection:
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT o.symbol, SUM(e.quantity)
                 FROM trade_executions e JOIN buy_orders o ON o.reference = e.order_reference
                 JOIN accounts a ON a.account_id = o.available_account_id
-                WHERE a.code = %s AND e.settlement_status = 'pending'
+                WHERE a.code = %s AND e.settlement_status = %s
                 GROUP BY o.symbol ORDER BY o.symbol
-            """, (available_account,))
+            """, (available_account, status))
             return [(symbol, int(quantity)) for symbol, quantity in cursor.fetchall()]
