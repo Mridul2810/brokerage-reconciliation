@@ -72,6 +72,7 @@ docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sq
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/009_trade_execution.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/010_trade_settlement.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/011_reconciliation_reports.sql
+docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/012_investigations.sql
 ```
 
 Create the demo accounts, then run the Python commands:
@@ -108,6 +109,7 @@ docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/009_trade_execution.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/010_trade_settlement.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/011_reconciliation_reports.sql
+docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/012_investigations.sql
 RUN_DB_TESTS=1 ./.venv/bin/python -m unittest discover -s tests -v
 ```
 
@@ -136,7 +138,7 @@ copied from the internal database. Extra demo executions will produce extra brea
 The file must contain a complete snapshot of all executions for the named account,
 using the same observation point as the current internal state. The internal read
 uses a repeatable-read transaction. Historical cutoffs, timestamped external
-snapshots, raw input-file persistence, and investigation workflows are pending.
+snapshots and raw input-file persistence are pending.
 Pause trading/settlement during this initial demo. A status difference is reported
 as a mismatch; the tool does not automatically infer that it is a settlement delay.
 
@@ -149,6 +151,15 @@ preserved. Report creation time is not a historical trade cutoff. Reports and
 break rows reject updates/deletions, but privileged SQL can bypass those protections
 or append evidence; application-role restrictions remain future work. Repeated
 `--save` commands intentionally create separate runs.
+
+Investigation events append notes and statuses to a break. New breaks start open;
+operators move them to investigating, then resolved, and can reopen them by
+returning to investigating. Same-status events add further notes. Event references
+support identical retries and reject changed contents. Resolution is an operator
+declaration, not proof of a corrected external file or a financial repair. Actor
+names are supplied by the caller and are not authenticated identities. Original
+breaks and prior events are preserved; direct privileged SQL remains outside the
+application's workflow guarantees.
 
 ## Accounting model
 

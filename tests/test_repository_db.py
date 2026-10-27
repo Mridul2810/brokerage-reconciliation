@@ -19,6 +19,7 @@ from brokerage.executions import execute_buy_order, pending_positions, settled_p
 from brokerage.settlement import settle_execution
 from brokerage.clearing import load_internal_trades
 from brokerage.reports import save_report
+from brokerage.investigations import record_event
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -126,6 +127,51 @@ class RepositoryTests(unittest.TestCase):
                 self.assertEqual(cursor.fetchone()[0], 0)
                 cursor.execute("SELECT clearing_records_sha256 FROM reconciliation_runs WHERE run_id = %s", (run_id,))
                 self.assertEqual(len(cursor.fetchone()[0]), 64)
+
+    def make_quantity_break(self):
+        available, execution = self.executed_trade()
+        records = load_internal_trades(available)
+        run = save_report(available, "faulty.csv", records, [replace(records[0], quantity=3)])
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT break_id FROM reconciliation_breaks WHERE run_id = %s", (run,))
+                return cursor.fetchone()[0]
+
+    def test_investigation_history_preserves_original_break(self):
+        break_id = self.make_quantity_break()
+        record_event(f"note-{uuid4()}", break_id, "investigating", "test_operator", "Checking quantity")
+        record_event(f"note-{uuid4()}", break_id, "resolved", "test_operator", "Synthetic input error documented")
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT status FROM investigation_events WHERE break_id = %s ORDER BY event_id", (break_id,))
+                self.assertEqual(cursor.fetchall(), [("investigating",), ("resolved",)])
+                cursor.execute("SELECT internal_value, clearing_value FROM reconciliation_breaks WHERE break_id = %s", (break_id,))
+                self.assertEqual(cursor.fetchone(), ("2", "3"))
+
+    def test_investigation_retry_and_conflict(self):
+        break_id = self.make_quantity_break()
+        reference = f"note-{uuid4()}"
+        first = record_event(reference, break_id, "investigating", "test_operator", "Checking quantity")
+        retry = record_event(reference, break_id, "investigating", "test_operator", "Checking quantity")
+        self.assertTrue(first.created)
+        self.assertFalse(retry.created)
+        self.assertEqual(first.event_id, retry.event_id)
+        with self.assertRaises(DuplicateReferenceError):
+            record_event(reference, break_id, "investigating", "test_operator", "Different note")
+
+    def test_investigation_cannot_skip_directly_to_resolved(self):
+        break_id = self.make_quantity_break()
+        with self.assertRaisesRegex(ValueError, "Cannot change"):
+            record_event(f"note-{uuid4()}", break_id, "resolved", "test_operator", "Premature closure")
+
+    def test_resolved_investigation_can_be_reopened_with_new_event(self):
+        break_id = self.make_quantity_break()
+        for status in ("investigating", "resolved", "investigating"):
+            record_event(f"note-{uuid4()}", break_id, status, "test_operator", f"Move to {status}")
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT status FROM investigation_events WHERE break_id = %s ORDER BY event_id", (break_id,))
+                self.assertEqual(cursor.fetchall(), [("investigating",), ("resolved",), ("investigating",)])
 
     def test_settlement_moves_bank_cash_and_pending_shares_atomically(self):
         available, execution = self.executed_trade()
