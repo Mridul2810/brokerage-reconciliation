@@ -2,6 +2,7 @@
 
 import os
 import unittest
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from threading import Barrier
@@ -16,6 +17,8 @@ from brokerage.reservations import reserve_cash
 from brokerage.orders import cancel_buy_order, create_buy_order
 from brokerage.executions import execute_buy_order, pending_positions, settled_positions
 from brokerage.settlement import settle_execution
+from brokerage.clearing import load_internal_trades
+from brokerage.reports import save_report
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -84,6 +87,45 @@ class RepositoryTests(unittest.TestCase):
         create_buy_order(order, available, "AAPL", 2, Decimal("30.00"))
         execute_buy_order(execution, order, Decimal("25.00"))
         return available, execution
+
+    def test_internal_reconciliation_snapshot_tracks_settlement(self):
+        available, execution = self.executed_trade()
+        before = load_internal_trades(available)
+        self.assertEqual(len(before), 1)
+        self.assertEqual((before[0].reference, before[0].quantity, before[0].price_cents,
+                          before[0].settlement_status), (execution, 2, 2500, "pending"))
+        settle_execution(execution)
+        after = load_internal_trades(available)
+        self.assertEqual(after[0].settlement_status, "settled")
+        self.assertEqual(before[0].settlement_status, "pending")
+
+    def test_saved_report_preserves_evidence_after_live_settlement(self):
+        available, execution = self.executed_trade()
+        internal = load_internal_trades(available)
+        clearing = [replace(internal[0], quantity=3)]
+        bank_before = get_balance("bank_cash")
+        run_id = save_report(available, "synthetic.csv", internal, clearing)
+        self.assertEqual(get_balance("bank_cash"), bank_before)
+        settle_execution(execution)
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT internal_records, clearing_records FROM reconciliation_runs WHERE run_id = %s", (run_id,))
+                stored_internal, stored_clearing = cursor.fetchone()
+                self.assertEqual(stored_internal[0]["settlement_status"], "pending")
+                self.assertEqual(stored_clearing[0]["quantity"], 3)
+                cursor.execute("SELECT field, internal_value, clearing_value FROM reconciliation_breaks WHERE run_id = %s", (run_id,))
+                self.assertEqual(cursor.fetchall(), [("quantity", "2", "3")])
+
+    def test_matching_report_is_saved_with_no_breaks(self):
+        available, execution = self.executed_trade()
+        records = load_internal_trades(available)
+        run_id = save_report(available, "matching.csv", records, records)
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM reconciliation_breaks WHERE run_id = %s", (run_id,))
+                self.assertEqual(cursor.fetchone()[0], 0)
+                cursor.execute("SELECT clearing_records_sha256 FROM reconciliation_runs WHERE run_id = %s", (run_id,))
+                self.assertEqual(len(cursor.fetchone()[0]), 64)
 
     def test_settlement_moves_bank_cash_and_pending_shares_atomically(self):
         available, execution = self.executed_trade()

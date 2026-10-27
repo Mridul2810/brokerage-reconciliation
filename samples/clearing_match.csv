@@ -1,0 +1,2 @@
+reference,account,symbol,quantity,price_cents,settlement_status
+execution-demo-001,customer_alex_cash_liability,AAPL,2,4800,settled

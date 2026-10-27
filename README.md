@@ -37,7 +37,8 @@ the original. They are administrative corrections, not customer withdrawals:
 they may produce a negative balance and require an operational review in a real
 system. Partial reversals and reversing a reversal are not supported.
 Database administrator privileges can bypass guards; application roles are planned.
-Trades, settlement, reconciliation, and an HTTP API are not implemented yet.
+Reconciliation compares execution records with a validated clearing CSV and reports
+missing records, duplicates, and field mismatches. An HTTP API is not implemented yet.
 
 ## Run locally
 
@@ -70,6 +71,7 @@ docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sq
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/008_order_cancellation.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/009_trade_execution.sql
 docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/010_trade_settlement.sql
+docker compose exec -T db psql -U brokerage -d brokerage -v ON_ERROR_STOP=1 < sql/011_reconciliation_reports.sql
 ```
 
 Create the demo accounts, then run the Python commands:
@@ -105,6 +107,7 @@ docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/008_order_cancellation.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/009_trade_execution.sql
 docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/010_trade_settlement.sql
+docker compose exec -T db psql -U brokerage -d brokerage_test -v ON_ERROR_STOP=1 < sql/011_reconciliation_reports.sql
 RUN_DB_TESTS=1 ./.venv/bin/python -m unittest discover -s tests -v
 ```
 
@@ -115,6 +118,37 @@ guarantee a particular database interleaving or prove all concurrency behavior.
 
 The GitHub Actions workflow provisions a fresh PostgreSQL test database, applies
 the migrations, and runs the full suite on pushes and pull requests.
+
+## Reconciliation demo
+
+After reproducing the guided demo's settled `execution-demo-001` (2 AAPL at
+$48 for Alex), run:
+
+```sh
+./.venv/bin/python -m brokerage.reconcile_file samples/clearing_match.csv --account customer_alex_cash_liability
+./.venv/bin/python -m brokerage.reconcile_file samples/clearing_wrong_quantity.csv --account customer_alex_cash_liability
+```
+
+The first matches; the second reports quantity 2 internally versus 3 externally.
+These are hand-authored synthetic fixtures, not real clearing records or exports
+copied from the internal database. Extra demo executions will produce extra breaks.
+
+The file must contain a complete snapshot of all executions for the named account,
+using the same observation point as the current internal state. The internal read
+uses a repeatable-read transaction. Historical cutoffs, timestamped external
+snapshots, raw input-file persistence, and investigation workflows are pending.
+Pause trading/settlement during this initial demo. A status difference is reported
+as a mismatch; the tool does not automatically infer that it is a settlement delay.
+
+Exit codes: 0 means no breaks, 1 means breaks found, and 2 means invalid command
+input or CSV input. Unexpected database errors still surface as exceptions.
+Reconciliation never repairs ledger balances automatically. Add `--save` to persist
+a run's compared record snapshots and breaks. The SHA-256 fingerprints the parsed
+clearing records, not the original file bytes; record order and duplicates are
+preserved. Report creation time is not a historical trade cutoff. Reports and
+break rows reject updates/deletions, but privileged SQL can bypass those protections
+or append evidence; application-role restrictions remain future work. Repeated
+`--save` commands intentionally create separate runs.
 
 ## Accounting model
 
