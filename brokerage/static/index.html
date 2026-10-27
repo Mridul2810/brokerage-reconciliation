@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Brokerage Operations</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside>
+    <a class="brand" href="/">B<span>Brokerage<br>Operations</span></a>
+    <div class="nav-label">WORKSPACE</div>
+    <a class="nav active" href="#overview">Overview</a>
+    <a class="nav" href="#reports">Reconciliation</a>
+    <a class="nav" href="/docs" target="_blank" rel="noopener">API documentation ↗</a>
+    <div class="aside-footer"><span class="dot"></span> Local simulation<br><small>Synthetic trades · No real funds</small></div>
+  </aside>
+  <main id="overview">
+    <header><div><div class="eyebrow">BROKERAGE INFRASTRUCTURE</div><h1>Operations overview</h1><p>Follow cash, settlement, and the evidence behind every break.</p></div><span class="environment">DEVELOPMENT</span></header>
+    <form id="account-form"><label for="account">Available-cash account</label><div class="input-row"><input id="account" name="account" value="customer_alex_cash_liability" required spellcheck="false"><button id="refresh" type="submit">Load account ↗</button></div></form>
+    <div id="message" role="status" aria-live="polite"></div>
+    <section class="metrics" aria-label="Cash balances">
+      <article><span>Available cash</span><strong id="available">—</strong><small>Available for orders and withdrawals</small></article>
+      <article><span>Reserved cash</span><strong id="reserved">—</strong><small>Held for pending instructions</small></article>
+      <article><span>Total customer cash</span><strong id="total">—</strong><small>Available + reserved · USD</small></article>
+    </section>
+    <section class="panel positions"><div class="section-title"><h2>Share positions</h2><span>Execution-derived</span></div><div id="positions" class="position-list"><p class="empty">Load an account to view positions.</p></div></section>
+    <section id="reports" class="panel"><div class="section-title"><div><h2>Reconciliation runs</h2><p>Preserved comparisons · latest 50 runs for this account</p></div><span class="chip">READ ONLY</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Run</th><th>Clearing source</th><th>Created</th><th>Original breaks</th><th>Investigation</th><th></th></tr></thead><tbody id="runs"></tbody></table></div><p id="runs-empty" class="empty">No runs loaded.</p>
+    </section>
+    <section id="report-detail" class="panel" hidden><div class="section-title"><div><div class="eyebrow">PRESERVED EVIDENCE</div><h2 id="report-title"></h2><p id="report-source"></p></div><span id="report-result" class="chip"></span></div>
+      <p class="scope-note">Report creation time is not a historical trade cutoff. Resolution records an operator decision; the original break remains preserved.</p>
+      <div id="breaks"></div>
+      <details><summary>Compared record snapshots</summary><div id="snapshots"></div><p class="fingerprint" id="fingerprint"></p></details>
+    </section>
+    <footer>Python · PostgreSQL · FastAPI <span>Financial records cannot be changed from this dashboard.</span></footer>
+  </main>
+</body>
+</html>

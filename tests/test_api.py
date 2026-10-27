@@ -27,6 +27,32 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"account": "alex_cash", "currency": "USD", "balance_usd": "1024.00"})
 
+    def test_dashboard_and_script_are_served_locally(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Operations overview", response.text)
+        self.assertEqual(self.client.get("/static/app.js").status_code, 200)
+
+    def test_summary_returns_exact_cash_and_positions(self):
+        summary = {"account": "alex_cash", "currency": "USD", "available_usd": "1024.00",
+                   "reserved_usd": "100.00", "total_cash_usd": "1124.00", "positions": []}
+        with patch("brokerage.api.account_summary", return_value=summary) as read:
+            response = self.client.get("/accounts/alex_cash/summary")
+        read.assert_called_once_with("alex_cash")
+        self.assertEqual(response.json(), summary)
+
+    def test_summary_unknown_account_returns_404(self):
+        with patch("brokerage.api.account_summary", side_effect=ValueError("Unknown ledger account")):
+            self.assertEqual(self.client.get("/accounts/missing/summary").status_code, 404)
+
+    def test_run_list_requires_and_passes_account_scope(self):
+        with patch("brokerage.api.list_reports", return_value=[]) as reports:
+            self.assertEqual(self.client.get("/reconciliation/runs").status_code, 422)
+            response = self.client.get("/reconciliation/runs?account=alex_cash")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+        reports.assert_called_once_with("alex_cash")
+
     def test_unknown_account_returns_404(self):
         with patch("brokerage.api.get_balance", side_effect=ValueError("Unknown ledger account")):
             self.assertEqual(self.client.get("/accounts/missing/balance").status_code, 404)

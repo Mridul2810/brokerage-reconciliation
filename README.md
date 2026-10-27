@@ -130,8 +130,19 @@ the migrations, and runs the full suite on pushes and pull requests.
 
 Open `http://127.0.0.1:8000/docs` for interactive documentation. Endpoints:
 
+Open `http://127.0.0.1:8000/` for the local operations dashboard. It reads live
+available/reserved cash, pending/settled share positions, recent account-scoped
+reports, saved comparisons, and investigation timelines. Select an account and
+use View evidence to inspect a run. An operator-resolved break remains visible as
+original break evidence; only a comparison with zero original breaks says MATCH.
+Balance summaries use a single repeatable-read transaction. Reports are historical
+evidence; account balances are live reads, not balances at the report's creation.
+The dashboard is plain HTML/CSS/JavaScript served by FastAPI; no Node build is needed.
+
 - `GET /health`: process liveness, not database readiness.
 - `GET /accounts/{account_code}/balance`: USD balance as decimal text.
+- `GET /accounts/{account_code}/summary`: paired cash balances and share positions.
+- `GET /reconciliation/runs?account=...`: latest 50 runs and current investigation counts.
 - `GET /reconciliation/runs/{run_id}`: compared snapshots, breaks, and event history.
 
 Unknown resources return 404, invalid report IDs return 422, and database

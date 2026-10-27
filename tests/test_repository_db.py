@@ -20,6 +20,7 @@ from brokerage.settlement import settle_execution
 from brokerage.clearing import load_internal_trades
 from brokerage.reports import get_report, save_report
 from brokerage.investigations import record_event
+from brokerage.dashboard_data import account_summary, list_reports
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -109,6 +110,9 @@ class RepositoryTests(unittest.TestCase):
         saved_report = get_report(run_id)
         self.assertEqual(saved_report["breaks"][0]["status"], "open")
         self.assertEqual(saved_report["clearing_records"][0]["quantity"], 3)
+        recent = list_reports(available)
+        self.assertEqual((recent[0]["run_id"], recent[0]["break_count"], recent[0]["unresolved_count"]),
+                         (run_id, 1, 1))
         self.assertEqual(get_balance("bank_cash"), bank_before)
         settle_execution(execution)
         with connect_db() as connection:
@@ -358,6 +362,9 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(get_balance(available), Decimal("40.00"))
         self.assertEqual(get_balance(reserved), Decimal("60.00"))
         self.assertEqual(get_balance("bank_cash"), bank_before)
+        summary = account_summary(available)
+        self.assertEqual((summary["available_usd"], summary["reserved_usd"], summary["total_cash_usd"]),
+                         ("40.00", "60.00", "100.00"))
 
     def test_reservation_retry_and_conflict_preserve_balances(self):
         available, reserved = self.funded_cash_pair()
