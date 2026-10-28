@@ -3,6 +3,8 @@
 import os
 import unittest
 from dataclasses import replace
+from contextlib import redirect_stdout
+from io import StringIO
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from threading import Barrier
@@ -21,6 +23,7 @@ from brokerage.clearing import load_internal_trades
 from brokerage.reports import get_report, save_report
 from brokerage.investigations import record_event
 from brokerage.dashboard_data import account_summary, list_reports
+from brokerage.portfolio_demo import run_demo
 from brokerage.ledger import DuplicateReferenceError, JournalEntry, Posting, Side
 from brokerage.repository import get_balance, save_entry
 from brokerage.withdrawals import InsufficientFundsError, withdraw
@@ -47,6 +50,23 @@ class RepositoryTests(unittest.TestCase):
 
     def setUp(self):
         self.reference = f"test-{uuid4()}"
+
+    def test_portfolio_demo_rerun_preserves_cash_and_financial_entry_count(self):
+        with redirect_stdout(StringIO()):
+            first = run_demo()
+        before = account_summary(first["account"])
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM journal_entries")
+                entries_before = cursor.fetchone()[0]
+        with redirect_stdout(StringIO()):
+            second = run_demo()
+        self.assertEqual(account_summary(second["account"]), before)
+        self.assertNotEqual(first["break_run"], second["break_run"])
+        with connect_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM journal_entries")
+                self.assertEqual(cursor.fetchone()[0], entries_before)
 
     def funded_customer(self):
         customer = f"withdrawal_customer_{uuid4().hex}"

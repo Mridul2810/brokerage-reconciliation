@@ -43,6 +43,25 @@ exposes balances and preserved report evidence, including investigation history.
 
 ## Run locally
 
+For the fastest reproducible setup and a five-minute interview walkthrough, see
+[Demo guide](docs/DEMO.md). The full design, accounting flows, concurrency policy,
+and known limitations are in [Architecture](docs/ARCHITECTURE.md).
+See [Failure scenarios](docs/FAILURE_SCENARIOS.md) for the reliability demonstration,
+interview narration, and troubleshooting.
+
+Existing walkthrough databases can run the dedicated scenario directly:
+
+```sh
+./.venv/bin/python -m brokerage.portfolio_demo
+```
+
+On a fresh database, use `./.venv/bin/python -m brokerage.migrate` before the demo.
+The migration runner checks file hashes, tracks applied versions, and does not
+reset databases. It intentionally refuses to adopt an existing manually initialized
+schema; that database can continue working unchanged. The manual migration steps
+below are an alternative for the original guided workflow, not commands to rerun
+after the migration runner.
+
 Requires Python 3.12 and Docker Desktop with Compose. From this directory:
 
 ```sh
